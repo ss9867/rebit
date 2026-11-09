@@ -99,3 +99,20 @@ export function ensureFirstOperator() {
   createOperator(loginId, '레비 운영자', password);
   return { loginId, password, fromEnv: !!process.env.ADMIN_PASSWORD };
 }
+
+// 서버 로그를 볼 수 없거나 비밀번호를 잊었을 때: 환경변수 ADMIN_RESET_PASSWORD를 넣고 다시 시작하면
+// ADMIN_ID(기본 admin) 계정 비밀번호를 그 값으로 바꾼다. 계정이 없으면 만든다. 로그인한 뒤 변수는 지운다.
+export function resetOperatorFromEnv() {
+  const password = process.env.ADMIN_RESET_PASSWORD;
+  if (!password) return null;
+  const loginId = process.env.ADMIN_ID || 'admin';
+  if (password.length < 8) return { loginId, error: 'ADMIN_RESET_PASSWORD는 8자 이상이어야 합니다. 비밀번호를 바꾸지 않았어요.' };
+  const row = get('SELECT id FROM operators WHERE login_id = ?', loginId);
+  if (row) {
+    run('UPDATE operators SET pw_hash = ? WHERE id = ?', hashPassword(password), row.id);
+    run('DELETE FROM sessions WHERE operator_id = ?', row.id);
+  } else {
+    createOperator(loginId, '레비 운영자', password);
+  }
+  return { loginId, created: !row };
+}
