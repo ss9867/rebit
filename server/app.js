@@ -4,7 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  createOperator, createSession, endSession, hashPassword, operatorFrom, parseCookies, verifyPassword, visitorFrom,
+  VISITOR_COOKIE, createOperator, createSession, endSession, hashPassword, operatorFrom, parseCookies, verifyPassword, visitorFrom,
 } from './auth.js';
 import {
   all, get, run, settings, tx,
@@ -208,7 +208,8 @@ function visitorRoutes(r) {
   r.post('/api/levi/connect', async (ctx) => {
     const input = await ctx.json();
     const visitor = visitorFrom(ctx.cookies, { create: true });
-    if (visitor.cookie) ctx.setCookie(visitor.cookie);
+    if (visitor.token && ctx.embedded) ctx.visitorToken = visitor.token;
+    else if (visitor.cookie) ctx.setCookie(visitor.cookie);
     rateLimit(`connect:${ctx.ip}`, 10, 10 * 60 * 1000, '상담 연결을 너무 자주 시도했어요. 잠시 후 다시 눌러 주세요.');
     const first = text(input.first, '질문', { max: MESSAGE_MAX, required: false });
     const page = text(input.page, '페이지', { max: 200, required: false }) || null;
@@ -230,7 +231,7 @@ function visitorRoutes(r) {
       thread = currentThread(visitor.id);
       toOperators('threads', { id: thread.id, fresh: true });
     }
-    return { online: operatorsOnline(), thread: visitorThreadView(visitor.id) };
+    return { online: operatorsOnline(), thread: visitorThreadView(visitor.id), visitorToken: ctx.visitorToken };
   });
 
   r.post('/api/levi/messages', async (ctx) => {
@@ -539,6 +540,27 @@ async function handle(req, res) {
 
   const cookies = parseCookies(req.headers.cookie);
   const setCookies = [];
+
+  // 다른 사이트(예: 카페24 쇼핑몰)에 레비를 붙인 경우. ALLOWED_ORIGINS에 적힌 주소만 손님 API를 쓸 수 있고,
+  // 다른 사이트 쿠키는 브라우저가 막는 경우가 많아 손님 구분은 쿠키 대신 x-levi-visitor 헤더(스트림은 ?v=)로 받는다.
+  const origin = String(req.headers.origin || '');
+  const embedded = pathname.startsWith('/api/levi/') && ALLOWED_ORIGINS.has(origin);
+  if (embedded) {
+    res.setHeader('access-control-allow-origin', origin);
+    res.setHeader('vary', 'Origin');
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'access-control-allow-methods': 'GET, POST',
+        'access-control-allow-headers': 'content-type, x-levi-visitor',
+        'access-control-max-age': '600',
+      });
+      res.end();
+      return;
+    }
+    const token = String(req.headers['x-levi-visitor'] || url.searchParams.get('v') || '');
+    if (/^[\w-]{16,128}$/.test(token)) cookies[VISITOR_COOKIE] = token;
+    else delete cookies[VISITOR_COOKIE];
+  }
   const ctx = {
     req,
     res,
@@ -548,6 +570,7 @@ async function handle(req, res) {
     STREAM,
     ip: (process.env.TRUST_PROXY ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '') || req.socket.remoteAddress,
     operator: null,
+    embedded,
     setCookie: (c) => setCookies.push(c),
     json: () => readJson(req),
   };
@@ -587,6 +610,9 @@ async function handle(req, res) {
     reply(err.status || 500, { error: err instanceof HttpError ? err.message : '서버 오류가 발생했습니다.' });
   }
 }
+
+// 레비를 붙일 수 있는 다른 사이트 주소. 쉼표로 여러 개 (예: https://sodaonni.cafe24.com,https://www.example.com)
+const ALLOWED_ORIGINS = new Set(String(process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim().replace(/\/$/, '')).filter(Boolean));
 
 export function createServer() {
   return http.createServer((req, res) => {

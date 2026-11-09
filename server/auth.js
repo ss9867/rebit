@@ -79,7 +79,7 @@ export function visitorFrom(cookies, { create = false } = {}) {
   if (!create) return null;
   const fresh = randomToken();
   const { lastInsertRowid } = run('INSERT INTO visitors (token_hash, created_at) VALUES (?, ?)', sha256(fresh), Date.now());
-  return { id: Number(lastInsertRowid), cookie: cookieHeader(VISITOR_COOKIE, fresh, VISITOR_MS) };
+  return { id: Number(lastInsertRowid), token: fresh, cookie: cookieHeader(VISITOR_COOKIE, fresh, VISITOR_MS) };
 }
 
 export function createOperator(loginId, name, password) {

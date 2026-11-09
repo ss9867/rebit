@@ -154,6 +154,7 @@
 .lv-away .rabbit > ellipse:first-child { display: none; }
 
 .lv-inline-connect {
+  text-decoration: none;
   display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; cursor: pointer;
   border: 1px solid var(--lv-pink); border-radius: 99px; background: #fff; color: var(--lv-pink-deep);
   font-weight: 700; font-size: 13px;

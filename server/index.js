@@ -1,3 +1,4 @@
+import './platform.js';
 import { ensureFirstOperator } from './auth.js';
 import { createServer } from './app.js';
 

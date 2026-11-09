@@ -7,7 +7,39 @@ import {
 import { rabbitSvg } from './rabbit.js';
 
 const MAX = 1000;
+// 서버 없이 올리는 정적 버전(예: 카페24 스킨)은 페이지에 window.LEVI_STATIC = { welcome, hours, faqs, contactUrl }를 넣어 둔다.
+// 이때 저장된 답변·키워드 찾기는 그대로 되고, [상담 연결]은 contactUrl(1:1 문의 게시판 등)로 안내한다.
+// api 주소까지 넣으면 그 서버와 실시간 상담을 하고, 서버에 닿지 않을 때만 위의 정적 동작으로 바뀐다.
+const STATIC = window.LEVI_STATIC || null;
+const REMOTE = STATIC?.api ? String(STATIC.api).replace(/\/+$/, '') : '';
+let offline = !!STATIC && !REMOTE;
 const ALL = '전체';
+
+// 다른 사이트에 붙은 경우 그 사이트 쿠키를 쓸 수 없어서, 서버가 준 손님 번호표를 이 브라우저에 보관한다.
+const TOKEN_KEY = 'levi-visitor';
+let visitorToken = '';
+try { visitorToken = localStorage.getItem(TOKEN_KEY) || ''; } catch { /* 저장소를 못 쓰면 새로고침 때 상담이 이어지지 않을 뿐 */ }
+
+async function call(path, body) {
+  if (!REMOTE) return body === undefined ? api(path) : post(path, body);
+  const headers = {};
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  if (visitorToken) headers['x-levi-visitor'] = visitorToken;
+  const res = await fetch(REMOTE + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || '요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.');
+  return data;
+}
+
+function keepToken(token) {
+  if (!token) return;
+  visitorToken = token;
+  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* 위와 같음 */ }
+}
 
 const state = {
   boot: null,
@@ -186,7 +218,9 @@ function botAnswer(question) {
     appendBot(botRow(`이런 답변을 찾았어요. 카드를 눌러 확인해 보세요!`, { extra: carousel(found), mood: 'happy' }));
   } else {
     state.pending = question;
-    appendBot(botRow('앗, 딱 맞는 답변을 찾지 못했어요.\n아래 버튼을 누르면 상담원에게 지금 질문을 바로 전달할게요.', {
+    appendBot(botRow(offline
+      ? '앗, 딱 맞는 답변을 찾지 못했어요.\n아래 버튼을 누르면 1:1 문의로 안내해 드릴게요.'
+      : '앗, 딱 맞는 답변을 찾지 못했어요.\n아래 버튼을 누르면 상담원에게 지금 질문을 바로 전달할게요.', {
       mood: 'sweat',
       extra: html`<button type="button" class="lv-inline-connect" data-connect-inline>${raw(ICONS.headset)} 상담 연결하기</button>`,
     }));
@@ -200,7 +234,7 @@ function showFaq(id) {
   appendBot(html`${userRow(f.question)}${botRow(f.answer, {
     extra: html`<p class="lv-after">더 궁금한 점이 있으면 아래 <b>상담 연결</b>을 눌러 주세요.</p>`,
   })}`);
-  post(`/api/levi/faqs/${f.id}/view`).catch(() => {});
+  if (!offline) call(`/api/levi/faqs/${f.id}/view`, {}).catch(() => {});
 }
 
 // 상담 ------------------------------------------------------------------------
@@ -263,7 +297,7 @@ async function markRead() {
   if (state.thread?.unread && state.open) {
     state.thread.unread = 0;
     setBadge(0);
-    await post('/api/levi/read').catch(() => {});
+    await call('/api/levi/read', {}).catch(() => {});
   }
 }
 
@@ -282,18 +316,19 @@ function applyThread(data, { reply = false } = {}) {
 
 async function refreshThread(opts) {
   try {
-    applyThread(await api('/api/levi/thread'), opts);
+    applyThread(await call('/api/levi/thread'), opts);
   } catch {
     // 연결이 잠깐 끊긴 경우. 다음 알림에서 다시 받는다.
   }
 }
 
 function openStream() {
+  if (offline) return;
   const hasVisitor = !!state.thread;
   if (state.stream && state.streamVisitor === hasVisitor) return;
   state.stream?.close();
   state.streamVisitor = hasVisitor;
-  const es = new EventSource('/api/levi/stream');
+  const es = new EventSource(`${REMOTE}/api/levi/stream${REMOTE && visitorToken ? `?v=${encodeURIComponent(visitorToken)}` : ''}`);
   state.stream = es;
   es.addEventListener('hello', (e) => {
     state.online = JSON.parse(e.data).online;
@@ -307,10 +342,22 @@ function openStream() {
   es.addEventListener('thread', (e) => refreshThread({ reply: !!JSON.parse(e.data).reply }));
 }
 
+function connectStatic() {
+  const q = state.pending;
+  state.pending = null;
+  const guide = STATIC.contactText || '1:1 문의 게시판에 남겨 주시면 확인하는 대로 답변드릴게요.';
+  appendBot(botRow(`실시간 상담은 준비 중이에요.\n${guide}${q ? `\n\n남기실 질문: ${q}` : ''}`, {
+    mood: 'sweat',
+    extra: STATIC.contactUrl ? html`<a class="lv-inline-connect" href="${STATIC.contactUrl}">${raw(ICONS.headset)} 1:1 문의 남기기</a>` : '',
+  }));
+}
+
 async function connect() {
+  if (offline) return connectStatic();
   connectBtn.disabled = true;
   try {
-    const data = await post('/api/levi/connect', { first: state.pending || '', page: location.pathname });
+    const data = await call('/api/levi/connect', { first: state.pending || '', page: location.pathname });
+    keepToken(data.visitorToken);
     const forwarded = state.pending;
     state.pending = null;
     applyThread(data);
@@ -326,12 +373,12 @@ async function connect() {
 
 async function endChat() {
   if (!window.confirm('상담을 종료할까요?')) return;
-  await post('/api/levi/close').catch(() => {});
+  await call('/api/levi/close', {}).catch(() => {});
   await refreshThread();
 }
 
 async function sendLive(textValue) {
-  const data = await post('/api/levi/messages', { body: textValue });
+  const data = await call('/api/levi/messages', { body: textValue });
   applyThread({ thread: data.thread });
 }
 
@@ -432,10 +479,12 @@ log.addEventListener('click', (e) => {
 
 async function boot() {
   try {
-    state.boot = await api('/api/levi/boot');
+    state.boot = offline ? { away: '', online: false, thread: null, ...STATIC } : await call('/api/levi/boot');
   } catch {
+    // 상담 서버에 닿지 않으면 페이지에 넣어 둔 답변으로라도 동작한다.
+    offline = !!STATIC;
     state.boot = {
-      welcome: '안녕하세요, 레비예요!', away: '', hours: '', online: false, faqs: [], thread: null,
+      welcome: '안녕하세요, 레비예요!', away: '', hours: '', online: false, faqs: [], thread: null, ...(STATIC || {}),
     };
   }
   state.online = state.boot.online;

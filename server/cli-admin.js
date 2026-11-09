@@ -1,3 +1,4 @@
+import './platform.js';
 // 운영자 계정을 새로 만들거나, 비밀번호를 잊었을 때 임시 비밀번호로 바꾼다.
 // 사용법: npm run admin -- <아이디> [이름]
 import { createOperator, hashPassword, tempPassword } from './auth.js';

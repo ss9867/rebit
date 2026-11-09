@@ -13,7 +13,7 @@ let server;
 before(async () => {
   server = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/index.js'], {
     env: {
-      ...process.env, PORT: String(PORT), REBIT_DATA_DIR: dataDir, ADMIN_ID: 'tester', ADMIN_PASSWORD: 'test-pass-1234',
+      ...process.env, PORT: String(PORT), REBIT_DATA_DIR: dataDir, ADMIN_ID: 'tester', ADMIN_PASSWORD: 'test-pass-1234', ALLOWED_ORIGINS: 'https://shop.example/',
     },
     stdio: 'ignore',
   });
@@ -158,4 +158,43 @@ test('운영자: 저장된 답변 추가·수정·순서·삭제, 문구 설정'
 test('JSON이 아닌 쓰기 요청은 거절한다', async () => {
   const res = await fetch(`${BASE}/api/levi/connect`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'a=1' });
   assert.equal(res.status, 415);
+});
+
+test('허용한 다른 사이트에서는 쿠키 대신 번호표로 상담한다', async () => {
+  const SHOP = 'https://shop.example';
+  const pre = await fetch(`${BASE}/api/levi/connect`, {
+    method: 'OPTIONS',
+    headers: { origin: SHOP, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type, x-levi-visitor' },
+  });
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers.get('access-control-allow-origin'), SHOP);
+  assert.match(pre.headers.get('access-control-allow-headers'), /x-levi-visitor/);
+
+  const embed = async (url, body, token) => {
+    const headers = { origin: SHOP };
+    if (body) headers['content-type'] = 'application/json';
+    if (token) headers['x-levi-visitor'] = token;
+    const res = await fetch(BASE + url, { method: body ? 'POST' : 'GET', headers, body: body && JSON.stringify(body) });
+    assert.equal(res.headers.get('access-control-allow-origin'), SHOP);
+    assert.equal(res.headers.getSetCookie().length, 0, '다른 사이트 응답에는 쿠키를 넣지 않는다');
+    return { status: res.status, data: await res.json() };
+  };
+
+  const c = await embed('/api/levi/connect', { first: '카페24에서 왔어요' });
+  assert.equal(c.status, 200);
+  const token = c.data.visitorToken;
+  assert.ok(token && token.length >= 16);
+  assert.equal(c.data.thread.messages.at(-1).body, '카페24에서 왔어요');
+
+  const m = await embed('/api/levi/messages', { body: '두 번째 메시지' }, token);
+  assert.equal(m.status, 200);
+  assert.equal(m.data.thread.messages.at(-1).body, '두 번째 메시지');
+
+  const b = await embed('/api/levi/boot', null, token);
+  assert.equal(b.data.thread.messages.length, m.data.thread.messages.length);
+  assert.equal((await embed('/api/levi/messages', { body: '번호표 없음' })).status, 409);
+
+  // 허용하지 않은 사이트에는 CORS 허락을 주지 않는다.
+  const other = await fetch(`${BASE}/api/levi/boot`, { headers: { origin: 'https://evil.example' } });
+  assert.equal(other.headers.get('access-control-allow-origin'), null);
 });
