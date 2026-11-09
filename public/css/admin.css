@@ -175,3 +175,10 @@ label.check { display: flex; align-items: center; gap: 8px; }
   .grid2 { grid-template-columns: 1fr; }
   .msg { max-width: 88%; }
 }
+
+/* 운영자별 상담 구분 (운영 화면 전용) */
+.op-filter { display: block; padding: 0 10px 10px; border-bottom: 1px solid var(--line); }
+.op-filter select { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; font-family: inherit; font-size: 13px; color: var(--ink); }
+.handlers { color: var(--pink-deep, #d94f7c); font-weight: 600; }
+.msg-meta .op-name, .sys .op-name { color: var(--pink-deep, #d94f7c); font-weight: 700; }
+.ops li { flex-wrap: wrap; }

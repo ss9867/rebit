@@ -1,6 +1,6 @@
 // 운영자 화면: 상담 답장, 저장된 답변(자주 묻는 질문) 관리, 문구 설정, 계정 관리.
 import {
-  api, fmtAgo, fmtClock, fmtDay, html, post, raw, render,
+  api, fmtAgo, fmtClock, fmtDay, fragment, html, post, raw, render,
 } from './dom.js';
 import { MOOD_LIST, rabbitSvg } from '../levi/rabbit.js';
 
@@ -17,6 +17,7 @@ const state = {
   faqs: [],
   stream: null,
   roomKey: '',
+  opFilter: '', // 상담 목록을 이 운영자가 답한 것만 보기 ('' = 전체)
 };
 
 const STATUS = { waiting: ['대기', 'warn'], open: ['상담 중', 'ok'], closed: ['종료', ''] };
@@ -149,6 +150,9 @@ function showChat(view) {
         <button type="button" role="tab" data-filter="active" aria-selected="${state.filter === 'active'}">진행 중</button>
         <button type="button" role="tab" data-filter="closed" aria-selected="${state.filter === 'closed'}">종료</button>
       </div>
+      <label class="op-filter"><span class="sr">담당 운영자</span>
+        <select data-op-filter><option value="">모든 운영자의 상담</option></select>
+      </label>
       <div class="thread-list" data-list><p class="empty">불러오는 중…</p></div>
     </aside>
     <section class="room" data-room></section>
@@ -158,6 +162,17 @@ function showChat(view) {
     if (!b) return;
     state.filter = b.dataset.filter;
     view.querySelectorAll('[data-filter]').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
+    refreshThreads();
+  });
+  // 운영자별로 상담 모아 보기. 목록은 열 때마다 새로 받아 추가·이름 변경이 바로 반영되게 한다.
+  const opFilter = view.querySelector('[data-op-filter]');
+  api('/api/admin/operators').then(({ items }) => {
+    opFilter.append(fragment(html`${items.map((o) => html`<option value="${o.id}">${o.name}${o.id === state.me.id ? ' (나)' : ''} 님이 답한 상담</option>`)}`));
+    opFilter.value = state.opFilter;
+    if (opFilter.value !== state.opFilter) { state.opFilter = ''; refreshThreads(); }
+  }).catch(() => {});
+  opFilter.addEventListener('change', () => {
+    state.opFilter = opFilter.value;
     refreshThreads();
   });
   view.querySelector('[data-list]').addEventListener('click', (e) => {
@@ -178,7 +193,9 @@ function drawEmptyRoom() {
 
 async function refreshThreads() {
   try {
-    state.threads = await api(`/api/admin/threads?status=${state.filter === 'closed' ? 'closed' : 'active'}`);
+    const q = new URLSearchParams({ status: state.filter === 'closed' ? 'closed' : 'active' });
+    if (state.opFilter) q.set('operator', state.opFilter);
+    state.threads = await api(`/api/admin/threads?${q}`);
   } catch (err) {
     fail(err);
     return;
@@ -195,10 +212,10 @@ async function refreshThreads() {
         <span class="grow"></span>
         ${t.unread ? html`<span class="badge">${t.unread > 99 ? '99+' : t.unread}</span>` : ''}
       </span>
-      <span class="thread-last">${t.lastFrom === 'operator' ? '나: ' : ''}${t.last}</span>
-      <span class="thread-time">${fmtAgo(t.lastAt)}</span>
+      <span class="thread-last">${t.lastFrom === 'operator' ? '레비: ' : ''}${t.last}</span>
+      <span class="thread-time">${t.handlers.length ? html`<span class="handlers">담당 ${t.handlers.join(', ')}</span> · ` : ''}${fmtAgo(t.lastAt)}</span>
     </button>`)}`
-    : html`<p class="empty">${state.filter === 'closed' ? '종료된 상담이 없어요.' : '진행 중인 상담이 없어요.'}</p>`);
+    : html`<p class="empty">${state.opFilter ? '이 운영자가 답한 상담이 없어요.' : state.filter === 'closed' ? '종료된 상담이 없어요.' : '진행 중인 상담이 없어요.'}</p>`);
 }
 
 const stickerTray = () => html`${MOOD_LIST.map(([mood, label]) => html`
@@ -326,10 +343,12 @@ function openRoom(id) {
 }
 
 function roomMessage(m) {
-  if (m.from === 'system') return html`<p class="sys">${m.body} · ${fmtClock(m.at)}</p>`;
+  // 운영자 이름은 이 화면에서만 보인다. 손님에게는 모두 '레비'로 나간다.
+  if (m.from === 'system') return html`<p class="sys">${m.body}${m.operatorName ? html` <span class="op-name">(${m.operatorName})</span>` : ''} · ${fmtClock(m.at)}</p>`;
   const mine = m.from === 'operator';
+  const self = mine && m.operatorId === state.me.id;
   return html`<div class="msg ${mine ? 'mine' : ''}">
-    <span class="msg-meta">${mine ? '레비(나)' : '손님'} · ${fmtClock(m.at)}</span>
+    <span class="msg-meta">${mine ? html`레비 · <b class="op-name">${m.operatorName || '상담원'}${self ? ' (나)' : ''}</b>` : '손님'} · ${fmtClock(m.at)}</span>
     ${m.mood ? html`<span class="sticker">${rabbit(88, m.mood)}</span>` : html`<span class="bubble">${m.body}</span>`}
   </div>`;
 }
@@ -351,7 +370,7 @@ async function loadRoom(id) {
   const { thread, messages } = data;
   const [label, cls] = STATUS[thread.status];
   render(app.querySelector('[data-room-title]'), html`<b>${thread.label}</b> <span class="tag ${cls}">${label}</span>
-    <span class="muted small">${fmtDay(thread.createdAt)} 시작${thread.page ? ` · ${thread.page}에서 연결` : ''}${thread.pastCount ? ` · 지난 상담 ${thread.pastCount}건` : ''}</span>`);
+    <span class="muted small">${fmtDay(thread.createdAt)} 시작${thread.page ? ` · ${thread.page}에서 연결` : ''}${thread.pastCount ? ` · 지난 상담 ${thread.pastCount}건` : ''}${thread.handlers.length ? ` · 담당 ${thread.handlers.join(', ')}` : ''}</span>`);
   const closed = thread.status === 'closed';
   app.querySelector('[data-close-thread]').hidden = closed;
   app.querySelector('[data-composer]').hidden = closed;
@@ -535,8 +554,12 @@ async function showAccount(view) {
     </section>
     <section class="panel">
       <div class="panel-head"><h2>운영자 계정</h2></div>
-      <ul class="ops">${ops.map((o) => html`<li><b>${o.name}</b> <span class="muted">${o.loginId}</span><span class="grow"></span>
-        ${o.id === state.me.id ? html`<span class="tag ok">나</span>` : html`<button type="button" class="btn ghost sm danger" data-del-op="${o.id}" data-name="${o.name}">삭제</button>`}</li>`)}</ul>
+      <p class="muted small">이름은 운영 화면에서 누가 상담했는지 구분하는 데만 쓰여요. 손님에게는 모두 <b>레비</b>로 보여요.</p>
+      <ul class="ops">${ops.map((o) => html`<li><b>${o.name}</b> <span class="muted">${o.loginId}</span>
+        ${o.id === state.me.id ? html`<span class="tag ok">나</span>` : ''}<span class="grow"></span>
+        <button type="button" class="btn ghost sm" data-op-chats="${o.id}" title="이 운영자가 답한 상담 보기">상담 ${o.handled}건</button>
+        <button type="button" class="btn ghost sm" data-rename-op="${o.id}" data-name="${o.name}">이름 변경</button>
+        ${o.id === state.me.id ? '' : html`<button type="button" class="btn ghost sm danger" data-del-op="${o.id}" data-name="${o.name}">삭제</button>`}</li>`)}</ul>
       <form data-op class="add-op">
         <h3>운영자 추가</h3>
         <div class="grid2">
@@ -567,6 +590,30 @@ async function showAccount(view) {
     } catch (err) { fail(err); }
   });
   view.querySelector('.ops').addEventListener('click', async (e) => {
+    const chats = e.target.closest('[data-op-chats]');
+    if (chats) {
+      state.opFilter = chats.dataset.opChats;
+      state.filter = 'closed';
+      state.currentId = null;
+      switchTab('chat');
+      return;
+    }
+    const rename = e.target.closest('[data-rename-op]');
+    if (rename) {
+      const name = window.prompt('새 이름 (운영 화면에만 보여요)', rename.dataset.name)?.trim();
+      if (!name || name === rename.dataset.name) return;
+      try {
+        await api(`/api/admin/operators/${rename.dataset.renameOp}`, { method: 'PUT', body: { name } });
+        if (Number(rename.dataset.renameOp) === state.me.id) {
+          state.me.name = name;
+          const meName = app.querySelector('.who .muted');
+          if (meName) meName.textContent = name;
+        }
+        toast('이름을 바꿨어요.');
+        showAccount(view);
+      } catch (err) { fail(err); }
+      return;
+    }
     const b = e.target.closest('[data-del-op]');
     if (!b || !window.confirm(`${b.dataset.name} 계정을 삭제할까요?`)) return;
     try {

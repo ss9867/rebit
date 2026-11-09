@@ -70,6 +70,11 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `);
 
+// 예전 DB에 없는 칸을 채운다. 메시지를 보낸 운영자 이름은 계정이 지워져도 기록에 남도록 따로 저장한다.
+if (!db.prepare('PRAGMA table_info(messages)').all().some((c) => c.name === 'operator_name')) {
+  db.exec('ALTER TABLE messages ADD COLUMN operator_name TEXT');
+}
+
 export const get = (sql, ...params) => db.prepare(sql).get(...params);
 export const all = (sql, ...params) => db.prepare(sql).all(...params);
 export const run = (sql, ...params) => db.prepare(sql).run(...params);

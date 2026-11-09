@@ -198,3 +198,47 @@ test('허용한 다른 사이트에서는 쿠키 대신 번호표로 상담한�
   const other = await fetch(`${BASE}/api/levi/boot`, { headers: { origin: 'https://evil.example' } });
   assert.equal(other.headers.get('access-control-allow-origin'), null);
 });
+
+test('운영자 이름은 운영 화면에만 보이고, 운영자별로 상담을 모아 볼 수 있다', async () => {
+  const boss = client();
+  assert.equal((await boss('/api/admin/login', { method: 'POST', body: { loginId: 'tester', password: 'test-pass-1234' } })).status, 200);
+  const made = await boss('/api/admin/operators', { method: 'POST', body: { loginId: 'kim', name: '김상담', password: 'kim-pass-1234' } });
+  assert.equal(made.status, 200);
+  const kim = client();
+  assert.equal((await kim('/api/admin/login', { method: 'POST', body: { loginId: 'kim', password: 'kim-pass-1234' } })).status, 200);
+
+  const guest = client();
+  await guest('/api/levi/connect', { method: 'POST', body: { first: '이름 테스트' } });
+  const { id } = (await kim('/api/admin/threads')).data.items.find((t) => t.handlers.length === 0 && t.status === 'waiting');
+  await kim(`/api/admin/threads/${id}/messages`, { method: 'POST', body: { body: '첫 번째 운영자 답장' } });
+  await boss(`/api/admin/threads/${id}/messages`, { method: 'POST', body: { body: '관리자도 답해요' } });
+
+  // 손님 쪽 응답에는 운영자 이름·번호가 전혀 없다.
+  const seen = await guest('/api/levi/thread');
+  assert.equal(seen.data.thread.messages.filter((m) => m.from === 'operator').length, 2);
+  assert.ok(!JSON.stringify(seen.data).includes('김상담'));
+  assert.ok(!JSON.stringify(seen.data).includes('operator' + 'Name'));
+
+  // 운영 화면에는 메시지마다 누가 보냈는지 나온다.
+  const detail = await boss(`/api/admin/threads/${id}`);
+  const ops = detail.data.messages.filter((m) => m.from === 'operator').map((m) => m.operatorName);
+  assert.deepEqual(ops, ['김상담', '레비 운영자']);
+  assert.deepEqual([...detail.data.thread.handlers].sort(), ['김상담', '레비 운영자'].sort());
+
+  // 종료한 사람도 기록된다.
+  await kim(`/api/admin/threads/${id}/close`, { method: 'POST' });
+  const closed = await boss(`/api/admin/threads/${id}`);
+  assert.equal(closed.data.messages.at(-1).operatorName, '김상담');
+  assert.ok(!JSON.stringify((await guest('/api/levi/thread')).data).includes('김상담'));
+
+  // 운영자별 상담 모아 보기와 상담 수
+  const byKim = await boss(`/api/admin/threads?status=closed&operator=${made.data.id}`);
+  assert.deepEqual(byKim.data.items.map((t) => t.id), [id]);
+  const list = (await boss('/api/admin/operators')).data.items;
+  assert.equal(list.find((o) => o.loginId === 'kim').handled, 1);
+
+  // 이름을 바꿔도 이미 보낸 메시지에는 보낼 때의 이름이 남는다.
+  assert.equal((await boss(`/api/admin/operators/${made.data.id}`, { method: 'PUT', body: { name: '김매니저' } })).status, 200);
+  assert.equal((await boss('/api/admin/operators')).data.items.find((o) => o.loginId === 'kim').name, '김매니저');
+  assert.equal((await boss(`/api/admin/threads/${id}`)).data.messages.find((m) => m.from === 'operator').operatorName, '김상담');
+});

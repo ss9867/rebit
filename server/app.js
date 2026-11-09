@@ -98,15 +98,22 @@ setInterval(() => {
 
 // 공통 변환 --------------------------------------------------------------------
 
+// 손님에게 가는 메시지에는 운영자 정보를 넣지 않는다. 손님 화면에는 모두 '레비'로 보인다.
 const messageView = (m) => ({
   id: m.id, from: m.sender, body: m.body, mood: m.mood, at: m.created_at,
 });
 
-const history = (threadId) => all(
+// 운영 화면용: 누가 보냈는지(또는 종료했는지)까지 붙인다.
+const adminMessageView = (m) => ({
+  ...messageView(m),
+  ...(m.operator_name ? { operatorId: m.operator_id, operatorName: m.operator_name } : {}),
+});
+
+const history = (threadId, view = messageView) => all(
   'SELECT * FROM messages WHERE thread_id = ? ORDER BY id DESC LIMIT ?',
   threadId,
   HISTORY_LIMIT,
-).reverse().map(messageView);
+).reverse().map(view);
 
 const faqView = (f, { admin = false } = {}) => ({
   id: f.id,
@@ -135,11 +142,14 @@ const threadSummary = (t) => ({
   lastFrom: t.last_from,
   lastAt: t.last_at,
   createdAt: t.created_at,
+  handlers: t.handlers ? t.handlers.split(String.fromCharCode(31)) : [],
 });
 
 const THREAD_SELECT = `SELECT t.*,
   (SELECT m.body FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_body,
-  (SELECT m.sender FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_from
+  (SELECT m.sender FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_from,
+  (SELECT group_concat(n, char(31)) FROM (SELECT DISTINCT m.operator_name AS n FROM messages m
+    WHERE m.thread_id = t.id AND m.sender = 'operator' AND m.operator_name IS NOT NULL)) AS handlers
   FROM threads t`;
 
 function loadThread(id) {
@@ -148,18 +158,18 @@ function loadThread(id) {
   return row;
 }
 
-function addMessage(threadId, sender, { body = '', mood = null, operatorId = null }) {
+function addMessage(threadId, sender, { body = '', mood = null, operator = null }) {
   const now = Date.now();
   run(
-    'INSERT INTO messages (thread_id, sender, operator_id, body, mood, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    threadId, sender, operatorId, body, mood, now,
+    'INSERT INTO messages (thread_id, sender, operator_id, operator_name, body, mood, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    threadId, sender, operator?.id ?? null, operator?.name ?? null, body, mood, now,
   );
   run('UPDATE threads SET last_at = ? WHERE id = ?', now, threadId);
 }
 
-function closeThread(thread, by) {
+function closeThread(thread, by, operator = null) {
   tx(() => {
-    addMessage(thread.id, 'system', { body: by === 'visitor' ? '손님이 상담을 종료했어요.' : '상담이 종료되었어요. 이용해 주셔서 감사해요!' });
+    addMessage(thread.id, 'system', { body: by === 'visitor' ? '손님이 상담을 종료했어요.' : '상담이 종료되었어요. 이용해 주셔서 감사해요!', operator });
     run("UPDATE threads SET status = 'closed', closed_at = ?, unread_op = 0 WHERE id = ?", Date.now(), thread.id);
   });
   toVisitor(thread.visitor_id, 'thread', { id: thread.id });
@@ -302,10 +312,20 @@ function operatorRoutes(r) {
   });
 
   r.get('/api/admin/operators', op, () => ({
-    items: all('SELECT id, login_id, name, created_at FROM operators ORDER BY id').map((o) => ({
-      id: o.id, loginId: o.login_id, name: o.name, createdAt: o.created_at,
+    items: all(`SELECT o.id, o.login_id, o.name, o.created_at,
+      (SELECT COUNT(DISTINCT m.thread_id) FROM messages m WHERE m.operator_id = o.id AND m.sender = 'operator') AS handled
+      FROM operators o ORDER BY o.id`).map((o) => ({
+      id: o.id, loginId: o.login_id, name: o.name, createdAt: o.created_at, handled: o.handled,
     })),
   }));
+
+  // 이름 바꾸기. 이미 보낸 메시지에는 보낼 때의 이름이 남는다.
+  r.put('/api/admin/operators/:id', op, async (ctx) => {
+    const id = intId(ctx.params.id);
+    const name = text((await ctx.json()).name, '이름', { max: 30 });
+    if (!get('SELECT 1 AS x FROM operators WHERE id = ?', id)) throw new HttpError(404, '계정을 찾을 수 없습니다.');
+    run('UPDATE operators SET name = ? WHERE id = ?', name, id);
+  });
 
   r.post('/api/admin/operators', op, async (ctx) => {
     const input = await ctx.json();
@@ -327,8 +347,13 @@ function operatorRoutes(r) {
   // 상담 ------------------------------------------------------------
   r.get('/api/admin/threads', op, (ctx) => {
     const closed = ctx.query.get('status') === 'closed';
+    // ?operator=<운영자 번호>: 그 운영자가 답장한 상담만
+    const opId = ctx.query.get('operator') ? intId(ctx.query.get('operator')) : null;
     const rows = all(
-      `${THREAD_SELECT} WHERE t.status ${closed ? "= 'closed'" : "!= 'closed'"} ORDER BY t.last_at DESC LIMIT 200`,
+      `${THREAD_SELECT} WHERE t.status ${closed ? "= 'closed'" : "!= 'closed'"}
+       ${opId ? "AND EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.sender = 'operator' AND m.operator_id = ?)" : ''}
+       ORDER BY t.last_at DESC LIMIT 200`,
+      ...(opId ? [opId] : []),
     );
     return {
       online: operatorsOnline(),
@@ -341,7 +366,7 @@ function operatorRoutes(r) {
   r.get('/api/admin/threads/:id', op, (ctx) => {
     const row = loadThread(ctx.params.id);
     const past = get("SELECT COUNT(*) AS n FROM threads WHERE visitor_id = ? AND id != ? AND status = 'closed'", row.visitor_id, row.id).n;
-    return { thread: { ...threadSummary(row), pastCount: past }, messages: history(row.id) };
+    return { thread: { ...threadSummary(row), pastCount: past }, messages: history(row.id, adminMessageView) };
   });
 
   r.post('/api/admin/threads/:id/read', op, (ctx) => {
@@ -357,7 +382,7 @@ function operatorRoutes(r) {
     if (mood && !MOODS.includes(mood)) throw bad('없는 이모티콘입니다.');
     const body = mood ? '' : text(input.body, '메시지', { max: MESSAGE_MAX });
     tx(() => {
-      addMessage(row.id, 'operator', { body, mood, operatorId: ctx.operator.id });
+      addMessage(row.id, 'operator', { body, mood, operator: ctx.operator });
       run("UPDATE threads SET status = 'open', unread_op = 0, unread_visitor = unread_visitor + 1 WHERE id = ?", row.id);
     });
     toVisitor(row.visitor_id, 'thread', { id: row.id, reply: true });
@@ -366,7 +391,7 @@ function operatorRoutes(r) {
 
   r.post('/api/admin/threads/:id/close', op, (ctx) => {
     const row = loadThread(ctx.params.id);
-    if (row.status !== 'closed') closeThread(row, 'operator');
+    if (row.status !== 'closed') closeThread(row, 'operator', ctx.operator);
   });
 
   // 자주 묻는 질문 ---------------------------------------------------
