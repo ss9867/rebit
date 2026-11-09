@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rebit · 포근한 리빙 셀렉트숍</title>
+  <meta name="description" content="가상의 리빙 셀렉트숍 rebit. 토끼 챗봇 레비가 자주 묻는 질문에 답하고 상담원과 연결해 줍니다.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap">
+  <link rel="stylesheet" href="/css/shop.css">
+  <link rel="stylesheet" href="/levi/levi.css">
+</head>
+<body>
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+
+  <div class="topbar">
+    <p>신규 회원 첫 구매 <b>10% 할인</b> · 50,000원 이상 <b>무료배송</b></p>
+  </div>
+
+  <header class="header">
+    <div class="wrap header-in">
+      <button type="button" class="menu-btn" data-menu aria-label="메뉴 열기" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+      <a class="logo" href="/" aria-label="rebit 홈">
+        <span class="logo-mark" data-logo></span>
+        <span class="logo-text">rebit</span>
+      </a>
+      <nav class="gnb" data-gnb aria-label="상품 분류">
+        <a href="#new">NEW</a>
+        <a href="#best">BEST</a>
+        <a href="#category">LIVING</a>
+        <a href="#category">KITCHEN</a>
+        <a href="#category">FABRIC</a>
+        <a href="#category">STATIONERY</a>
+        <a href="#best" class="sale">SALE</a>
+      </nav>
+      <form class="search" role="search" data-search>
+        <label class="sr" for="q">상품 검색</label>
+        <input id="q" type="search" placeholder="머그컵, 블랭킷…">
+        <button type="submit" aria-label="검색">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.500-3.500"/></svg>
+        </button>
+      </form>
+      <div class="util">
+        <a href="#login">로그인</a>
+        <a href="#cart" id="cart" class="cart-link" aria-label="장바구니">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.700" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h2l2.400 11h10.800L21 7H6.200"/><circle cx="9.500" cy="19.500" r="1.300"/><circle cx="17" cy="19.500" r="1.300"/></svg>
+          <span class="cart-count" data-cart-count>0</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" aria-roledescription="carousel" aria-label="기획전">
+      <div class="hero-track" data-hero></div>
+      <div class="hero-dots" data-hero-dots role="tablist" aria-label="기획전 선택"></div>
+    </section>
+
+    <section class="wrap section" id="category" aria-labelledby="cat-title">
+      <h2 id="cat-title" class="sr">카테고리</h2>
+      <ul class="cats" data-cats></ul>
+    </section>
+
+    <section class="wrap section" id="best" aria-labelledby="best-title">
+      <div class="sec-head">
+        <div>
+          <p class="eyebrow">WEEKLY BEST</p>
+          <h2 id="best-title">이번 주 가장 사랑받은 아이템</h2>
+        </div>
+        <div class="tabs" role="tablist" data-best-tabs></div>
+      </div>
+      <ul class="products" data-best></ul>
+    </section>
+
+    <section class="wrap section banners">
+      <a class="banner b1" href="#new">
+        <p class="eyebrow">WINTER EDIT</p>
+        <h3>겨울밤을 데우는<br>캔들 &amp; 블랭킷</h3>
+        <span>최대 30% 할인 →</span>
+      </a>
+      <a class="banner b2" href="#new">
+        <p class="eyebrow">REBIT ORIGINAL</p>
+        <h3>레비 에디션<br>머그 컬렉션</h3>
+        <span>한정 수량 보러가기 →</span>
+      </a>
+    </section>
+
+    <section class="wrap section" id="new" aria-labelledby="new-title">
+      <div class="sec-head">
+        <div>
+          <p class="eyebrow">NEW ARRIVALS</p>
+          <h2 id="new-title">새로 들어왔어요</h2>
+        </div>
+        <a class="more" href="#new">전체보기 →</a>
+      </div>
+      <ul class="products small" data-new></ul>
+    </section>
+
+    <section class="wrap section" aria-labelledby="review-title">
+      <div class="sec-head">
+        <div>
+          <p class="eyebrow">REAL REVIEW</p>
+          <h2 id="review-title">rebit 고객님들의 이야기</h2>
+        </div>
+      </div>
+      <ul class="reviews" data-reviews></ul>
+    </section>
+
+    <section class="wrap section cs">
+      <div class="cs-box">
+        <div class="cs-levi" data-cs-levi></div>
+        <div>
+          <p class="eyebrow">CUSTOMER CENTER</p>
+          <h2>궁금한 건 레비에게 물어보세요</h2>
+          <p class="cs-desc">배송·교환·적립금처럼 자주 묻는 질문은 바로 답해 드리고,<br>더 필요한 건 상담원과 1:1로 연결해 드려요.</p>
+          <button type="button" class="btn-pink" data-open-levi>레비와 대화하기</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-in">
+      <div>
+        <p class="logo-text small">rebit</p>
+        <p class="note">이 사이트는 챗봇 시연용 가상 쇼핑몰입니다. 실제 상품 판매나 결제는 이뤄지지 않습니다.</p>
+      </div>
+      <dl class="cs-info">
+        <dt>고객센터</dt>
+        <dd>평일 10:00 ~ 17:00 · 점심 12:30 ~ 13:30</dd>
+        <dt>상담</dt>
+        <dd>화면 오른쪽 아래 레비 버튼</dd>
+      </dl>
+      <p class="copy">© rebit (가상 쇼핑몰)</p>
+    </div>
+  </footer>
+
+  <div class="toast" data-toast role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="/js/shop.js"></script>
+  <script type="module" src="/levi/levi.js"></script>
+</body>
+</html>
