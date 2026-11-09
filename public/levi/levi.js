@@ -51,6 +51,7 @@ const state = {
   stream: null,
   streamVisitor: false,
   liveKey: '',
+  recoFor: null, // 종료 후 추천 질문을 이미 보여 준 상담 번호
   hintTimer: null,
 };
 
@@ -92,6 +93,7 @@ render(root, html`
     <div class="levi-log" data-log role="log" aria-live="polite" tabindex="0">
       <div data-bot></div>
       <div data-live></div>
+      <div data-after></div>
     </div>
     <form class="levi-compose" data-form autocomplete="off">
       <label class="sr" for="levi-input">메시지</label>
@@ -110,6 +112,7 @@ const panel = $('#levi-panel');
 const log = $('[data-log]');
 const botBox = $('[data-bot]');
 const liveBox = $('[data-live]');
+const afterBox = $('[data-after]'); // 상담이 시작된 뒤의 레비 안내·답변은 상담 기록 아래에 쌓는다.
 const input = $('[data-input]');
 const sendBtn = $('[data-send]');
 const connectBtn = $('[data-connect]');
@@ -140,7 +143,7 @@ const userRow = (body, at = Date.now()) => html`
   </div>`;
 
 function appendBot(content) {
-  botBox.append(fragment(content));
+  (state.thread ? afterBox : botBox).append(fragment(content));
   requestAnimationFrame(toBottom);
 }
 
@@ -301,11 +304,34 @@ async function markRead() {
   }
 }
 
+// 지난 상담과 그 뒤의 레비 대화를 위쪽 기록으로 옮겨 고정한다. 새 상담은 그 아래에 이어서 그린다.
+function freezeLive() {
+  botBox.append(...liveBox.childNodes, ...afterBox.childNodes);
+  liveBox.replaceChildren();
+  state.liveKey = '';
+}
+
+// 상담이 끝나면 레비가 다시 자주 묻는 질문을 보여 준다. 이후 입력은 키워드로 답변을 찾는다.
+function showRecommendAfterClose() {
+  const t = state.thread;
+  if (!t || t.status !== 'closed' || state.recoFor === t.id || !state.boot?.faqs.length) return;
+  state.recoFor = t.id;
+  appendBot(botRow('상담이 종료되었어요. 이용해 주셔서 고마워요!\n더 궁금한 점은 아래 질문을 눌러 보거나 직접 입력해 주세요.', {
+    mood: 'love',
+    extra: carousel(state.boot.faqs, { withChips: true }),
+  }));
+  wireTracks();
+}
+
 function applyThread(data, { reply = false } = {}) {
   state.online = data.online ?? state.online;
+  const prevId = state.thread?.id;
   state.thread = data.thread;
   if (state.thread?.messages.length === 0) state.thread = null;
+  // 새 상담이 시작됐거나, 끝난 상담이 서버 목록에서 빠졌을 때(종료 1시간 뒤) 지난 기록은 화면에 남겨 둔다.
+  if (prevId && state.thread?.id !== prevId) freezeLive();
   drawLive();
+  showRecommendAfterClose();
   drawChrome();
   if (state.open) markRead();
   else {
@@ -453,8 +479,9 @@ log.addEventListener('click', (e) => {
   if (faq) return showFaq(Number(faq.dataset.faq));
   const chip = e.target.closest('[data-chip]');
   if (chip) {
+    // 처음 인사와 상담 종료 뒤에 추천 카드 묶음이 여러 개 있을 수 있어서, 누른 버튼이 속한 묶음만 바꾼다.
     state.category = chip.dataset.chip;
-    const main = botBox.querySelector('[data-main]');
+    const main = chip.closest('[data-main]');
     main.querySelectorAll('[data-chip]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.chip === state.category)));
     const track = main.querySelector('[data-track]');
     render(track, cards(state.boot.faqs.filter((f) => state.category === ALL || f.category === state.category)));
