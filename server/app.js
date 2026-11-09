@@ -134,7 +134,8 @@ const currentThread = (visitorId) => get(
 
 const threadSummary = (t) => ({
   id: t.id,
-  label: visitorLabel(t.visitor_id),
+  label: t.visitor_name ? `${t.visitor_name} (${visitorLabel(t.visitor_id)})` : visitorLabel(t.visitor_id),
+  customerName: t.visitor_name || '',
   status: t.status,
   unread: t.unread_op,
   page: t.page,
@@ -148,6 +149,7 @@ const threadSummary = (t) => ({
 const THREAD_SELECT = `SELECT t.*,
   (SELECT m.body FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_body,
   (SELECT m.sender FROM messages m WHERE m.thread_id = t.id ORDER BY m.id DESC LIMIT 1) AS last_from,
+  (SELECT v.name FROM visitors v WHERE v.id = t.visitor_id) AS visitor_name,
   (SELECT group_concat(n, char(31)) FROM (SELECT DISTINCT m.operator_name AS n FROM messages m
     WHERE m.thread_id = t.id AND m.sender = 'operator' AND m.operator_name IS NOT NULL)) AS handlers
   FROM threads t`;
@@ -434,6 +436,37 @@ function operatorRoutes(r) {
     });
     toVisitor(row.visitor_id, 'thread', { id: row.id, reply: true });
     toOperators('threads', { id: row.id });
+  });
+
+  // 고객 이름 적어 두기 (운영 화면 전용, 빈 값이면 지움). 같은 손님의 다른 상담에도 이어진다.
+  r.put('/api/admin/threads/:id/customer', op, async (ctx) => {
+    const row = loadThread(ctx.params.id);
+    const name = text((await ctx.json()).name, '고객 이름', { max: 20, required: false });
+    run('UPDATE visitors SET name = ? WHERE id = ?', name || null, row.visitor_id);
+    toOperators('threads', { id: row.id });
+  });
+
+  // 내 자주 쓰는 문구 (운영자 계정마다 따로) ------------------------------
+  const myPhrase = (ctx) => {
+    const row = get('SELECT * FROM operator_phrases WHERE id = ? AND operator_id = ?', intId(ctx.params.id), ctx.operator.id);
+    if (!row) throw new HttpError(404, '문구를 찾을 수 없습니다.');
+    return row;
+  };
+  r.get('/api/admin/phrases', op, (ctx) => ({
+    items: all('SELECT id, body FROM operator_phrases WHERE operator_id = ? ORDER BY id', ctx.operator.id),
+  }));
+  r.post('/api/admin/phrases', op, async (ctx) => {
+    const body = text((await ctx.json()).body, '문구', { max: MESSAGE_MAX });
+    if (get('SELECT COUNT(*) AS n FROM operator_phrases WHERE operator_id = ?', ctx.operator.id).n >= 50) throw bad('문구는 50개까지 저장할 수 있어요.');
+    const { lastInsertRowid } = run('INSERT INTO operator_phrases (operator_id, body, created_at) VALUES (?, ?, ?)', ctx.operator.id, body, Date.now());
+    return { id: Number(lastInsertRowid) };
+  });
+  r.put('/api/admin/phrases/:id', op, async (ctx) => {
+    const row = myPhrase(ctx);
+    run('UPDATE operator_phrases SET body = ? WHERE id = ?', text((await ctx.json()).body, '문구', { max: MESSAGE_MAX }), row.id);
+  });
+  r.delete('/api/admin/phrases/:id', op, (ctx) => {
+    run('DELETE FROM operator_phrases WHERE id = ?', myPhrase(ctx).id);
   });
 
   r.post('/api/admin/threads/:id/close', op, (ctx) => {

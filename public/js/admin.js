@@ -18,6 +18,8 @@ const state = {
   stream: null,
   roomKey: '',
   opFilter: '', // 상담 목록을 이 운영자가 답한 것만 보기 ('' = 전체)
+  phrases: [], // 내 자주 쓰는 문구
+  roomCustomer: '', // 열어 둔 상담의 고객 이름 ({{user}})
 };
 
 const STATUS = { waiting: ['대기', 'warn'], open: ['상담 중', 'ok'], closed: ['종료', ''] };
@@ -231,6 +233,7 @@ function openRoom(id) {
     <header class="room-head">
       <button type="button" class="icon-btn back" data-back aria-label="목록으로">←</button>
       <div class="grow" data-room-title></div>
+      <button type="button" class="btn ghost sm" data-customer-name title="{{user}} 자리에 들어갈 이름 (운영 화면 전용)">고객 이름</button>
       <button type="button" class="btn ghost sm" data-close-thread hidden>상담 종료</button>
     </header>
     <div class="log" data-log role="log" aria-live="polite" tabindex="0"><p class="empty">불러오는 중…</p></div>
@@ -239,9 +242,15 @@ function openRoom(id) {
       <input type="search" data-quick-search placeholder="저장된 답변 검색" aria-label="저장된 답변 검색">
       <div class="quick-list" data-quick-list></div>
     </div>
+    <div class="quick" data-phrases hidden>
+      <div class="phrase-head"><span class="muted small">누르면 입력창에 들어가요 · <b>{{user}}</b> 고객 이름, <b>{{char}}</b> 내 이름</span>
+        <button type="button" class="btn ghost sm" data-manage-phrases>문구 관리</button></div>
+      <div class="quick-list" data-phrase-list></div>
+    </div>
     <form class="composer" data-composer autocomplete="off">
       <div class="composer-tools">
         <button type="button" class="tool" data-toggle="tray" aria-expanded="false">${rabbit(22)} 이모티콘</button>
+        <button type="button" class="tool" data-toggle="phrases" aria-expanded="false">💬 내 문구</button>
         <button type="button" class="tool" data-toggle="quick" aria-expanded="false">📋 저장된 답변 넣기</button>
       </div>
       <div class="composer-row">
@@ -253,7 +262,9 @@ function openRoom(id) {
 
   const input = room.querySelector('[data-input]');
   const form = room.querySelector('[data-composer]');
-  const panels = { tray: room.querySelector('[data-tray]'), quick: room.querySelector('[data-quick]') };
+  const panels = {
+    tray: room.querySelector('[data-tray]'), quick: room.querySelector('[data-quick]'), phrases: room.querySelector('[data-phrases]'),
+  };
   const togglePanel = (name, show) => {
     Object.entries(panels).forEach(([key, el]) => {
       const on = key === name ? (show ?? el.hidden) : false;
@@ -264,7 +275,40 @@ function openRoom(id) {
       drawQuick('');
       room.querySelector('[data-quick-search]').focus();
     }
+    if (name === 'phrases' && !panels.phrases.hidden) drawPhrases();
   };
+
+  // 내 문구: {{user}}·{{char}}를 바꿔서 입력창에 넣는다. 보내기 전에 고칠 수 있다.
+  const phraseList = room.querySelector('[data-phrase-list]');
+  const drawPhrases = async () => {
+    let items;
+    try { items = (await api('/api/admin/phrases')).items; } catch (err) { fail(err); return; }
+    state.phrases = items;
+    render(phraseList, items.length ? html`${items.map((p) => html`
+      <button type="button" class="quick-item" data-phrase="${p.id}"><span>${fillPhrase(p.body)}</span></button>`)}`
+      : html`<p class="empty">저장한 문구가 없어요. [문구 관리]에서 추가해 주세요.</p>`);
+  };
+  phraseList.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-phrase]');
+    if (!b) return;
+    const p = state.phrases.find((x) => x.id === Number(b.dataset.phrase));
+    const filled = fillPhrase(p.body);
+    input.value = input.value ? `${input.value}\n${filled}` : filled;
+    togglePanel('phrases', false);
+    input.focus();
+  });
+  room.querySelector('[data-manage-phrases]').addEventListener('click', () => switchTab('account'));
+  room.querySelector('[data-customer-name]').addEventListener('click', async () => {
+    const name = window.prompt('고객 이름 ({{user}} 자리에 들어가요. 운영 화면에만 보여요. 비우면 지워요)', state.roomCustomer || '');
+    if (name === null) return;
+    try {
+      await api(`/api/admin/threads/${id}/customer`, { method: 'PUT', body: { name: name.trim() } });
+      toast(name.trim() ? '고객 이름을 저장했어요.' : '고객 이름을 지웠어요.');
+      state.roomKey = '';
+      await loadRoom(id);
+      if (!panels.phrases.hidden) drawPhrases();
+    } catch (err) { fail(err); }
+  });
 
   room.querySelector('[data-back]').addEventListener('click', () => {
     state.currentId = null;
@@ -342,6 +386,13 @@ function openRoom(id) {
   loadRoom(id);
 }
 
+// 문구 속 바꿔 넣기: {{user}}/{{고객}} → 고객 이름(없으면 '고객'), {{char}}/{{상담원}} → 내 운영자 이름
+function fillPhrase(body) {
+  return body
+    .replace(/\{\{\s*(user|고객)\s*\}\}/gi, state.roomCustomer || '고객')
+    .replace(/\{\{\s*(char|상담원)\s*\}\}/gi, state.me.name);
+}
+
 function roomMessage(m) {
   // 운영자 이름은 이 화면에서만 보인다. 손님에게는 모두 '레비'로 나간다.
   if (m.from === 'system') return html`<p class="sys">${m.body}${m.operatorName ? html` <span class="op-name">(${m.operatorName})</span>` : ''} · ${fmtClock(m.at)}</p>`;
@@ -368,6 +419,7 @@ async function loadRoom(id) {
   }
   if (state.currentId !== id || !app.querySelector('[data-log]')) return;
   const { thread, messages } = data;
+  state.roomCustomer = thread.customerName;
   const [label, cls] = STATUS[thread.status];
   render(app.querySelector('[data-room-title]'), html`<b>${thread.label}</b> <span class="tag ${cls}">${label}</span>
     <span class="muted small">${fmtDay(thread.createdAt)} 시작${thread.page ? ` · ${thread.page}에서 연결` : ''}${thread.pastCount ? ` · 지난 상담 ${thread.pastCount}건` : ''}${thread.handlers.length ? ` · 담당 ${thread.handlers.join(', ')}` : ''}</span>`);
@@ -559,8 +611,27 @@ async function showSettings(view) {
 
 async function showAccount(view) {
   let ops;
-  try { ops = (await api('/api/admin/operators')).items; } catch (err) { fail(err); return; }
+  let phrases;
+  try {
+    [ops, phrases] = await Promise.all([api('/api/admin/operators'), api('/api/admin/phrases')]).then((r) => r.map((x) => x.items));
+  } catch (err) { fail(err); return; }
   render(view, html`<div class="account">
+    <section class="panel phrases-panel">
+      <div class="panel-head"><div><h2>내 자주 쓰는 문구</h2>
+        <p class="muted small">상담 화면의 <b>💬 내 문구</b>에서 골라 넣을 수 있어요. 운영자 계정마다 따로 저장돼요.</p></div></div>
+      <p class="vars small"><code>{{user}}</code> 고객 이름 (상담 화면에서 [고객 이름]으로 정해요. 없으면 "고객") ·
+        <code>{{char}}</code> 내 이름 (<b>${state.me.name}</b>) <span class="muted">— 문구에 쓰면 손님에게 그대로 보여요.</span></p>
+      <ul class="phrase-edit">${phrases.map((p) => html`<li>
+        <textarea rows="2" maxlength="1000" data-phrase-body="${p.id}">${p.body}</textarea>
+        <div class="phrase-btns">
+          <button type="button" class="btn ghost sm" data-save-phrase="${p.id}">저장</button>
+          <button type="button" class="btn ghost sm danger" data-del-phrase="${p.id}">삭제</button>
+        </div></li>`)}</ul>
+      <form data-add-phrase class="add-phrase">
+        <textarea name="body" rows="2" maxlength="1000" required placeholder="예: 안녕하세요, {{user}}님! 상담원 {{char}}입니다."></textarea>
+        <div class="row-end"><button class="btn primary">문구 추가</button></div>
+      </form>
+    </section>
     <section class="panel">
       <div class="panel-head"><h2>내 비밀번호 바꾸기</h2></div>
       <form data-pw>
@@ -588,6 +659,30 @@ async function showAccount(view) {
       </form>
     </section>
   </div>`);
+  const addPhrase = view.querySelector('[data-add-phrase]');
+  addPhrase.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await post('/api/admin/phrases', { body: addPhrase.body.value });
+      toast('문구를 추가했어요.');
+      showAccount(view);
+    } catch (err) { fail(err); }
+  });
+  view.querySelector('.phrase-edit').addEventListener('click', async (e) => {
+    const save = e.target.closest('[data-save-phrase]');
+    const del = e.target.closest('[data-del-phrase]');
+    try {
+      if (save) {
+        const body = view.querySelector(`[data-phrase-body="${save.dataset.savePhrase}"]`).value;
+        await api(`/api/admin/phrases/${save.dataset.savePhrase}`, { method: 'PUT', body: { body } });
+        toast('문구를 저장했어요.');
+      } else if (del && window.confirm('이 문구를 삭제할까요?')) {
+        await api(`/api/admin/phrases/${del.dataset.delPhrase}`, { method: 'DELETE', body: {} });
+        showAccount(view);
+      }
+    } catch (err) { fail(err); }
+  });
+
   const pw = view.querySelector('[data-pw]');
   pw.addEventListener('submit', async (e) => {
     e.preventDefault();

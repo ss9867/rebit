@@ -79,6 +79,32 @@ const addColumn = (table, column, type) => {
 };
 addColumn('messages', 'operator_name', 'TEXT');
 addColumn('threads', 'idle_warned_for', 'INTEGER');
+// visitors.name: 운영자가 상담 화면에서 적어 두는 고객 이름 ({{user}} 자리에 들어간다)
+addColumn('visitors', 'name', 'TEXT');
+
+// 운영자마다 따로 쓰는 자주 쓰는 문구. {{user}}·{{char}}는 보낼 때 운영 화면에서 바뀐다.
+const hadPhrases = !!db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'operator_phrases'").get();
+db.exec(`CREATE TABLE IF NOT EXISTS operator_phrases (
+  id INTEGER PRIMARY KEY,
+  operator_id INTEGER NOT NULL REFERENCES operators(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS operator_phrases_op ON operator_phrases(operator_id, id);`);
+
+export const PHRASE_SEED = [
+  '안녕하세요, {{user}}님! 레비 상담원 {{char}}입니다. 무엇을 도와드릴까요?',
+  '확인해 보고 바로 안내해 드릴게요. 잠시만 기다려 주세요!',
+  '더 궁금하신 점 있으실까요? 없으시면 상담을 마무리할게요. 이용해 주셔서 감사합니다 🐰',
+];
+export function seedPhrases(operatorId) {
+  const now = Date.now();
+  for (const body of PHRASE_SEED) {
+    db.prepare('INSERT INTO operator_phrases (operator_id, body, created_at) VALUES (?, ?, ?)').run(operatorId, body, now);
+  }
+}
+// 이 기능이 생기기 전부터 있던 운영자에게도 예시 문구를 한 번 넣어 준다.
+if (!hadPhrases) for (const o of db.prepare('SELECT id FROM operators').all()) seedPhrases(o.id);
 
 export const get = (sql, ...params) => db.prepare(sql).get(...params);
 export const all = (sql, ...params) => db.prepare(sql).all(...params);

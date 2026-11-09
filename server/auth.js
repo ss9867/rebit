@@ -1,6 +1,6 @@
 // 운영자 로그인과 방문자 식별. 방문자는 가입 없이 쿠키에 든 무작위 토큰으로만 구분한다.
 import crypto from 'node:crypto';
-import { get, run } from './db.js';
+import { get, run, seedPhrases } from './db.js';
 
 export const SECURE_COOKIE = process.env.NODE_ENV === 'production';
 const SESSION_MS = 14 * 24 * 60 * 60 * 1000;
@@ -87,6 +87,7 @@ export function createOperator(loginId, name, password) {
     'INSERT INTO operators (login_id, name, pw_hash, created_at) VALUES (?, ?, ?, ?)',
     loginId, name, hashPassword(password), Date.now(),
   );
+  seedPhrases(Number(lastInsertRowid));
   return Number(lastInsertRowid);
 }
 

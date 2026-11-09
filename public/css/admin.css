@@ -185,3 +185,13 @@ label.check { display: flex; align-items: center; gap: 8px; }
 fieldset.idle { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 4px; margin: 4px 0 14px; }
 fieldset.idle legend { font-weight: 700; padding: 0 6px; }
 fieldset.idle p { margin: 0 0 10px; }
+
+/* 내 자주 쓰는 문구 */
+.phrase-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 0 2px 8px; }
+.phrases-panel { grid-column: 1 / -1; }
+.vars { margin: 0 0 12px; line-height: 1.7; }
+.vars code { background: var(--pink-soft); color: var(--pink-deep); padding: 1px 6px; border-radius: 6px; font-size: 12.5px; }
+.phrase-edit { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.phrase-edit li { display: flex; gap: 8px; align-items: flex-start; }
+.phrase-edit textarea { flex: 1; }
+.phrase-btns { display: flex; flex-direction: column; gap: 4px; }

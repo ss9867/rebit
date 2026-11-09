@@ -288,3 +288,38 @@ test('상담원 답장 뒤 손님이 말이 없으면 안내 후 자동 종료 (
   await wait(1500);
   assert.equal((await chatty('/api/levi/thread')).data.thread.status, 'open');
 });
+
+test('내 문구는 운영자마다 따로, 고객 이름은 운영 화면에만', async () => {
+  const boss = client();
+  await boss('/api/admin/login', { method: 'POST', body: { loginId: 'tester', password: 'test-pass-1234' } });
+  await boss('/api/admin/operators', { method: 'POST', body: { loginId: 'lee', name: '이상담', password: 'lee-pass-1234' } });
+  const lee = client();
+  await lee('/api/admin/login', { method: 'POST', body: { loginId: 'lee', password: 'lee-pass-1234' } });
+
+  // 새 운영자에게는 예시 문구가 들어 있다.
+  const start = (await lee('/api/admin/phrases')).data.items;
+  assert.ok(start.length >= 1);
+  assert.match(start[0].body, /\{\{user\}\}/);
+
+  const added = await lee('/api/admin/phrases', { method: 'POST', body: { body: '안녕하세요 {{char}}입니다' } });
+  assert.equal(added.status, 200);
+  const mine = (await lee('/api/admin/phrases')).data.items.map((p) => p.id);
+  const bosses = (await boss('/api/admin/phrases')).data.items.map((p) => p.id);
+  assert.ok(mine.includes(added.data.id));
+  assert.ok(!bosses.includes(added.data.id), '다른 운영자 문구는 안 보인다');
+  // 남의 문구는 고치거나 지울 수 없다.
+  assert.equal((await boss(`/api/admin/phrases/${added.data.id}`, { method: 'PUT', body: { body: 'x' } })).status, 404);
+  assert.equal((await boss(`/api/admin/phrases/${added.data.id}`, { method: 'DELETE' })).status, 404);
+  assert.equal((await lee(`/api/admin/phrases/${added.data.id}`, { method: 'PUT', body: { body: '고친 문구' } })).status, 200);
+  assert.equal((await lee(`/api/admin/phrases/${added.data.id}`, { method: 'DELETE' })).status, 200);
+
+  // 고객 이름
+  const guest = client();
+  await guest('/api/levi/connect', { method: 'POST', body: { first: '이름 저장 테스트' } });
+  const tid = (await guest('/api/levi/thread')).data.thread.id;
+  assert.equal((await lee(`/api/admin/threads/${tid}/customer`, { method: 'PUT', body: { name: '홍길동' } })).status, 200);
+  const t = (await lee(`/api/admin/threads/${tid}`)).data.thread;
+  assert.equal(t.customerName, '홍길동');
+  assert.match(t.label, /^홍길동 \(손님 \d{4}\)$/);
+  assert.ok(!JSON.stringify((await guest('/api/levi/boot')).data).includes('홍길동'));
+});
