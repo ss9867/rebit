@@ -323,7 +323,12 @@ function showRecommendAfterClose() {
   wireTracks();
 }
 
-function applyThread(data, { reply = false } = {}) {
+const HINTS = {
+  idle: '레비: 답변이 없으면 상담이 곧 자동 종료돼요.',
+  closed: '레비: 상담이 자동으로 종료되었어요.',
+};
+
+function applyThread(data, { reply = false, notice = '' } = {}) {
   state.online = data.online ?? state.online;
   const prevId = state.thread?.id;
   state.thread = data.thread;
@@ -336,7 +341,7 @@ function applyThread(data, { reply = false } = {}) {
   if (state.open) markRead();
   else {
     setBadge(state.thread?.unread || 0);
-    if (reply && state.thread?.unread) showHint('레비: 상담원 답변이 도착했어요!');
+    if (reply && state.thread?.unread) showHint(HINTS[notice] || '레비: 상담원 답변이 도착했어요!');
   }
 }
 
@@ -365,7 +370,10 @@ function openStream() {
     drawLive();
     drawChrome();
   });
-  es.addEventListener('thread', (e) => refreshThread({ reply: !!JSON.parse(e.data).reply }));
+  es.addEventListener('thread', (e) => {
+    const d = JSON.parse(e.data);
+    refreshThread({ reply: !!d.reply, notice: d.notice || '' });
+  });
 }
 
 function connectStatic() {

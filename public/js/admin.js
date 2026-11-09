@@ -525,6 +525,14 @@ async function showSettings(view) {
       <label>첫 인사<textarea name="welcome" rows="4" maxlength="600" required>${s.welcome}</textarea></label>
       <label>상담원 부재 안내 <span class="muted small">상담 화면을 연 운영자가 없을 때 보여요</span><textarea name="away" rows="3" maxlength="300" required>${s.away}</textarea></label>
       <label>운영 시간<input name="hours" maxlength="120" required value="${s.hours}"></label>
+      <fieldset class="idle">
+        <legend>답변 없는 상담 자동 종료</legend>
+        <p class="muted small">상담원이 답장한 뒤 손님이 아무 말이 없을 때 적용돼요. 손님이 답하면 다시 처음부터 재요. 0으로 두면 그 단계를 쓰지 않아요.</p>
+        <div class="grid2">
+          <label>종료 안내 <span class="muted small">분 뒤 "곧 종료돼요" 안내</span><input type="number" name="idle_warn" min="0" max="180" step="1" required value="${s.idle_warn}"></label>
+          <label>자동 종료 <span class="muted small">분 뒤 상담 종료</span><input type="number" name="idle_close" min="0" max="180" step="1" required value="${s.idle_close}"></label>
+        </div>
+      </fieldset>
       <div class="row-end"><button class="btn primary">저장</button></div>
     </form>
   </section>`);
@@ -532,8 +540,17 @@ async function showSettings(view) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await api('/api/admin/settings', { method: 'PUT', body: { welcome: form.welcome.value, away: form.away.value, hours: form.hours.value } });
-      toast('저장했어요. 손님이 레비 창을 새로 열면 반영돼요.');
+      await api('/api/admin/settings', {
+        method: 'PUT',
+        body: {
+          welcome: form.welcome.value,
+          away: form.away.value,
+          hours: form.hours.value,
+          idle_warn: Number(form.idle_warn.value),
+          idle_close: Number(form.idle_close.value),
+        },
+      });
+      toast('저장했어요. 문구는 손님이 레비 창을 새로 열면, 자동 종료 시간은 바로 반영돼요.');
     } catch (err) { fail(err); }
   });
 }

@@ -13,7 +13,7 @@ let server;
 before(async () => {
   server = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'server/index.js'], {
     env: {
-      ...process.env, PORT: String(PORT), REBIT_DATA_DIR: dataDir, ADMIN_ID: 'tester', ADMIN_PASSWORD: 'test-pass-1234', ALLOWED_ORIGINS: 'https://shop.example/',
+      ...process.env, PORT: String(PORT), REBIT_DATA_DIR: dataDir, ADMIN_ID: 'tester', ADMIN_PASSWORD: 'test-pass-1234', ALLOWED_ORIGINS: 'https://shop.example/', REBIT_IDLE_UNIT_MS: '200', REBIT_IDLE_SWEEP_MS: '50',
     },
     stdio: 'ignore',
   });
@@ -241,4 +241,50 @@ test('운영자 이름은 운영 화면에만 보이고, 운영자별로 상담�
   assert.equal((await boss(`/api/admin/operators/${made.data.id}`, { method: 'PUT', body: { name: '김매니저' } })).status, 200);
   assert.equal((await boss('/api/admin/operators')).data.items.find((o) => o.loginId === 'kim').name, '김매니저');
   assert.equal((await boss(`/api/admin/threads/${id}`)).data.messages.find((m) => m.from === 'operator').operatorName, '김상담');
+});
+
+test('상담원 답장 뒤 손님이 말이 없으면 안내 후 자동 종료 (시간은 운영자가 설정)', async () => {
+  // 테스트 서버에서 1분 = 200ms
+  const boss = client();
+  await boss('/api/admin/login', { method: 'POST', body: { loginId: 'tester', password: 'test-pass-1234' } });
+  const base = (await boss('/api/admin/settings')).data;
+  assert.equal(base.idle_warn, '5');
+  assert.equal(base.idle_close, '10');
+  const put = (extra) => boss('/api/admin/settings', {
+    method: 'PUT', body: { welcome: base.welcome, away: base.away, hours: base.hours, ...extra },
+  });
+  assert.equal((await put({ idle_warn: 10, idle_close: 5 })).status, 400);
+  assert.equal((await put({ idle_warn: -1, idle_close: 5 })).status, 400);
+  assert.equal((await put({ idle_warn: 3, idle_close: 6 })).status, 200);
+
+  const quiet = client();
+  const chatty = client();
+  await quiet('/api/levi/connect', { method: 'POST', body: { first: '조용한 손님' } });
+  await chatty('/api/levi/connect', { method: 'POST', body: { first: '말 많은 손님' } });
+  const quietId = (await quiet('/api/levi/thread')).data.thread.id;
+  const chattyId = (await chatty('/api/levi/thread')).data.thread.id;
+  await boss(`/api/admin/threads/${quietId}/messages`, { method: 'POST', body: { body: '답장 드려요' } });
+  await boss(`/api/admin/threads/${chattyId}/messages`, { method: 'POST', body: { body: '답장 드려요' } });
+
+  const wait = (ms) => new Promise((r) => { setTimeout(r, ms); });
+  await wait(800); // 3분(600ms) 지남 → 안내, 6분(1200ms) 전
+  const warned = (await quiet('/api/levi/thread')).data.thread;
+  assert.equal(warned.status, 'open');
+  const warns = warned.messages.filter((m) => m.from === 'system' && m.body.includes('3분 뒤에 상담이 자동으로 종료돼요'));
+  assert.equal(warns.length, 1);
+  // 손님이 답하면 타이머가 멈춘다.
+  await chatty('/api/levi/messages', { method: 'POST', body: { body: '아직 보고 있어요' } });
+
+  await wait(800); // 1600ms → 조용한 손님은 종료
+  const done = (await quiet('/api/levi/thread')).data.thread;
+  assert.equal(done.status, 'closed');
+  assert.match(done.messages.at(-1).body, /자동으로 종료/);
+  assert.equal(done.messages.filter((m) => m.body.includes('자동으로 종료돼요')).length, 1, '안내는 한 번만');
+  assert.equal((await chatty('/api/levi/thread')).data.thread.status, 'open');
+
+  // 0이면 자동 종료를 하지 않는다.
+  assert.equal((await put({ idle_warn: 0, idle_close: 0 })).status, 200);
+  await boss(`/api/admin/threads/${chattyId}/messages`, { method: 'POST', body: { body: '또 답장' } });
+  await wait(1500);
+  assert.equal((await chatty('/api/levi/thread')).data.thread.status, 'open');
 });

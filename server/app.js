@@ -167,13 +167,60 @@ function addMessage(threadId, sender, { body = '', mood = null, operator = null 
   run('UPDATE threads SET last_at = ? WHERE id = ?', now, threadId);
 }
 
+const CLOSE_TEXT = {
+  visitor: '손님이 상담을 종료했어요.',
+  operator: '상담이 종료되었어요. 이용해 주셔서 감사해요!',
+  idle: '답변이 없어 상담이 자동으로 종료되었어요. 이용해 주셔서 감사해요!',
+};
+
 function closeThread(thread, by, operator = null) {
   tx(() => {
-    addMessage(thread.id, 'system', { body: by === 'visitor' ? '손님이 상담을 종료했어요.' : '상담이 종료되었어요. 이용해 주셔서 감사해요!', operator });
-    run("UPDATE threads SET status = 'closed', closed_at = ?, unread_op = 0 WHERE id = ?", Date.now(), thread.id);
+    addMessage(thread.id, 'system', { body: CLOSE_TEXT[by], operator });
+    run(
+      `UPDATE threads SET status = 'closed', closed_at = ?, unread_op = 0
+       ${by === 'idle' ? ', unread_visitor = unread_visitor + 1' : ''} WHERE id = ?`,
+      Date.now(),
+      thread.id,
+    );
   });
-  toVisitor(thread.visitor_id, 'thread', { id: thread.id });
+  toVisitor(thread.visitor_id, 'thread', { id: thread.id, ...(by === 'idle' ? { reply: true, notice: 'closed' } : {}) });
   toOperators('threads', { id: thread.id });
+}
+
+// 자동 종료 ------------------------------------------------------------------------
+// 상담원이 답한 뒤 손님이 정해진 시간 동안 답이 없으면 먼저 안내하고, 그래도 없으면 상담을 닫는다.
+// 시간(분)은 운영 화면 [안내 문구]에서 바꾼다. 0이면 그 단계를 하지 않는다.
+export const IDLE_DEFAULTS = { idle_warn: '5', idle_close: '10' };
+const IDLE_UNIT_MS = Number(process.env.REBIT_IDLE_UNIT_MS) || 60 * 1000; // 1분 (테스트에서만 줄인다)
+const IDLE_SWEEP_MS = Number(process.env.REBIT_IDLE_SWEEP_MS) || 30 * 1000;
+
+const allSettings = () => ({ ...IDLE_DEFAULTS, ...settings() });
+
+export function sweepIdleThreads(now = Date.now()) {
+  const s = allSettings();
+  const warnMin = Number(s.idle_warn) || 0;
+  const closeMin = Number(s.idle_close) || 0;
+  if (!warnMin && !closeMin) return;
+  // 진행 중인 상담마다 시스템 안내를 뺀 마지막 메시지. 그게 상담원 메시지일 때만 시간을 잰다.
+  const rows = all(`SELECT t.id, t.visitor_id, t.idle_warned_for, m.id AS mid, m.sender, m.created_at AS mat
+    FROM threads t JOIN messages m ON m.id = (
+      SELECT x.id FROM messages x WHERE x.thread_id = t.id AND x.sender != 'system' ORDER BY x.id DESC LIMIT 1)
+    WHERE t.status = 'open'`);
+  for (const t of rows) {
+    if (t.sender !== 'operator') continue;
+    const idle = now - t.mat;
+    if (closeMin && idle >= closeMin * IDLE_UNIT_MS) {
+      closeThread(t, 'idle');
+    } else if (warnMin && idle >= warnMin * IDLE_UNIT_MS && t.idle_warned_for !== t.mid && (!closeMin || warnMin < closeMin)) {
+      const left = closeMin ? `${closeMin - warnMin}분 뒤에 상담이 자동으로 종료돼요. ` : '';
+      tx(() => {
+        addMessage(t.id, 'system', { body: `${warnMin}분 동안 답변이 없어요. ${left}더 궁금한 점이 있으면 메시지를 남겨 주세요.` });
+        run('UPDATE threads SET idle_warned_for = ?, unread_visitor = unread_visitor + 1 WHERE id = ?', t.mid, t.id);
+      });
+      toVisitor(t.visitor_id, 'thread', { id: t.id, reply: true, notice: 'idle' });
+      toOperators('threads', { id: t.id });
+    }
+  }
 }
 
 // 방문자 API -------------------------------------------------------------------
@@ -446,11 +493,23 @@ function operatorRoutes(r) {
   });
 
   // 설정 ---------------------------------------------------------------
-  r.get('/api/admin/settings', op, () => settings());
+  r.get('/api/admin/settings', op, () => allSettings());
 
   r.put('/api/admin/settings', op, async (ctx) => {
     const input = await ctx.json();
     const values = Object.entries(SETTING_KEYS).map(([key, max]) => [key, text(input[key], '문구', { max })]);
+    // 자동 종료 시간(분). 보내지 않으면 지금 값을 그대로 둔다.
+    const minutes = (key, label) => {
+      if (input[key] === undefined) return null;
+      const n = Number(input[key]);
+      if (!Number.isInteger(n) || n < 0 || n > 180) throw bad(`${label}은 0~180 사이의 분으로 정해 주세요.`);
+      return n;
+    };
+    const cur = allSettings();
+    const warn = minutes('idle_warn', '종료 안내 시간') ?? Number(cur.idle_warn);
+    const close = minutes('idle_close', '자동 종료 시간') ?? Number(cur.idle_close);
+    if (warn && close && warn >= close) throw bad('종료 안내는 자동 종료보다 먼저 나가도록 더 짧게 정해 주세요.');
+    values.push(['idle_warn', String(warn)], ['idle_close', String(close)]);
     tx(() => values.forEach(([key, value]) => run(
       'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
       key,
@@ -640,6 +699,9 @@ async function handle(req, res) {
 const ALLOWED_ORIGINS = new Set(String(process.env.ALLOWED_ORIGINS || '').split(',').map((o) => o.trim().replace(/\/$/, '')).filter(Boolean));
 
 export function createServer() {
+  setInterval(() => {
+    try { sweepIdleThreads(); } catch (err) { console.error('자동 종료 확인 실패:', err); }
+  }, IDLE_SWEEP_MS).unref();
   return http.createServer((req, res) => {
     handle(req, res).catch((err) => {
       console.error(err);

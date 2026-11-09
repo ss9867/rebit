@@ -71,9 +71,14 @@ CREATE TABLE IF NOT EXISTS settings (
 `);
 
 // 예전 DB에 없는 칸을 채운다. 메시지를 보낸 운영자 이름은 계정이 지워져도 기록에 남도록 따로 저장한다.
-if (!db.prepare('PRAGMA table_info(messages)').all().some((c) => c.name === 'operator_name')) {
-  db.exec('ALTER TABLE messages ADD COLUMN operator_name TEXT');
-}
+// threads.idle_warned_for: 자동 종료 안내를 이미 보낸 운영자 메시지 번호 (같은 답장에 안내가 두 번 나가지 않게)
+const addColumn = (table, column, type) => {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+};
+addColumn('messages', 'operator_name', 'TEXT');
+addColumn('threads', 'idle_warned_for', 'INTEGER');
 
 export const get = (sql, ...params) => db.prepare(sql).get(...params);
 export const all = (sql, ...params) => db.prepare(sql).all(...params);

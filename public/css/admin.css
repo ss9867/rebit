@@ -182,3 +182,6 @@ label.check { display: flex; align-items: center; gap: 8px; }
 .handlers { color: var(--pink-deep, #d94f7c); font-weight: 600; }
 .msg-meta .op-name, .sys .op-name { color: var(--pink-deep, #d94f7c); font-weight: 700; }
 .ops li { flex-wrap: wrap; }
+fieldset.idle { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 4px; margin: 4px 0 14px; }
+fieldset.idle legend { font-weight: 700; padding: 0 6px; }
+fieldset.idle p { margin: 0 0 10px; }
